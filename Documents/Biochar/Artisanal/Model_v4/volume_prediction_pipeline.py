@@ -1,8 +1,9 @@
 """
-Volume Prediction ML Pipeline — State of the Art  (v3)
+Volume Prediction ML Pipeline — State of the Art  (v4)
 =======================================================
 Input features : Kiln_Major_Axis, Kiln_Minor_Axis, Biochar_Major_Axis,
-                 Biochar_Minor_Axis, Mean_Distance, Scaling_Factor
+                 Biochar_Minor_Axis, Mean_Distance, Scaling_Factor,
+                 Calculated_Volume
 Target         : Volume (mL)
 Objectives     : RMSE ~25-30 | MAE ~25-30 | R² > 90 %
 
@@ -57,7 +58,8 @@ K_FOLDS      = 10
 RAW_FEATURES = [
     'Kiln_Major_Axis', 'Kiln_Minor_Axis',
     'Biochar_Major_Axis', 'Biochar_Minor_Axis',
-    'Mean_Distance', 'Scaling_Factor'
+    'Mean_Distance', 'Scaling_Factor',
+    'Calculated_Volume',
 ]
 TARGET = 'Volume'
 np.random.seed(RANDOM_STATE)
@@ -78,7 +80,10 @@ print(f"        Volume: {df[TARGET].min():.0f}–{df[TARGET].max():.0f} mL "
       f"(mean={df[TARGET].mean():.1f}, std={df[TARGET].std():.1f})")
 print(f"        Discrete bins (50 mL steps): "
       f"{sorted(df[TARGET].unique().astype(int))}")
-print(f"        Discretisation noise floor (RMSE₀): {df[TARGET].std()/np.sqrt(12):.1f} mL")
+
+cv = df['Calculated_Volume']
+print(f"\n[INFO]  Calculated_Volume: range {cv.min():.1f}–{cv.max():.1f}, "
+      f"r={cv.corr(y):.4f} with Volume (standalone RMSE≈106)")
 
 print("\n[EDA]  Pearson r with Volume:")
 for f in RAW_FEATURES:
@@ -169,6 +174,14 @@ def engineer_features(df_in):
     X['Fill_x_AR']        = X['Fill_Minor']   * X['Biochar_AR']
     X['Sqrt_Dist_norm']   = np.sqrt(X['Distance_norm'])
 
+    # ── Calculated_Volume features ───────────────────────────
+    # The formula value can be negative; shift to make log-safe
+    cv_min = X['Calculated_Volume'].min()
+    X['CalcVol_log']      = np.log(X['Calculated_Volume'] - cv_min + 1)
+    X['CalcVol_sq']       = X['Calculated_Volume'] ** 2
+    # Residual: how much does the formula differ from the spheroid estimate
+    X['CalcVol_vs_sph']   = X['Calculated_Volume'] - X['Vol_spheroid']
+
     return X
 
 Xeng = engineer_features(df)
@@ -197,16 +210,19 @@ print(mi_df.head(15).to_string(index=False))
 
 # Hand-picked: best MI, physically meaningful, minimal redundancy
 TREE_FEATURES = [
-    'Fill_Major',       # strongest predictor (MI=1.16): biochar/kiln size ratio
-    'Distance_norm',    # normalised distance (MI=1.00)
-    'Area_Ratio',       # 2-D fill fraction  (MI=0.97)
-    'Log_Mean_Dist',    # log distance (MI=0.90, linearises splits)
-    'Fill_x_Dist',      # fill × distance interaction
-    'Biochar_AR',       # shape factor
-    'Vol_spheroid',     # physics-based 3-D volume estimate
-    'Biochar_Minor_mm', # absolute short-axis (mm)
-    'Scaling_Factor',   # pixel→mm scale (captures zoom / kiln size)
-    'Fill_Minor',       # minor-axis fill fraction
+    'Calculated_Volume',  # formula-based volume estimate (r=0.738 with target)
+    'CalcVol_log',        # log-scaled formula value
+    'CalcVol_vs_sph',     # formula residual vs spheroid estimate
+    'Fill_Major',         # biochar/kiln size ratio  (MI=1.16)
+    'Distance_norm',      # normalised distance       (MI=1.00)
+    'Area_Ratio',         # 2-D fill fraction         (MI=0.97)
+    'Log_Mean_Dist',      # log distance
+    'Fill_x_Dist',        # fill × distance interaction
+    'Biochar_AR',         # shape factor
+    'Vol_spheroid',       # physics-based volume estimate (mm³)
+    'Biochar_Minor_mm',   # absolute short-axis (mm)
+    'Scaling_Factor',     # pixel→mm scale
+    'Fill_Minor',         # minor-axis fill fraction
 ]
 
 X_tree = Xeng[TREE_FEATURES]

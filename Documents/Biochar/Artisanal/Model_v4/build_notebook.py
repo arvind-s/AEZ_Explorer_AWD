@@ -23,13 +23,13 @@ def code(source):
 cells.append(md("""# Biochar Volume Prediction — ML Pipeline
 ### Artisanal Biochar Project · Model v4
 
-**Objective:** Predict the volume (mL) of a biochar piece from six image-derived measurements using state-of-the-art machine learning.
+**Objective:** Predict the volume (mL) of a biochar piece from seven image-derived measurements using state-of-the-art machine learning.
 
 | | |
 |---|---|
 | **Target** | Volume (mL) — 600 to 1,100 mL in 50 mL bins |
-| **Input features** | Kiln axes, Biochar axes, Mean Distance, Scaling Factor |
-| **Best result** | MAE 28.7 mL ✓ · R² 93.4 % ✓ · RMSE 37.4 mL |
+| **Input features** | Kiln axes, Biochar axes, Mean Distance, Scaling Factor, Calculated_Volume |
+| **Best result** | MAE 28.7 mL ✓ · R² 93.5 % ✓ · RMSE 37.2 mL |
 | **Validation** | 10-Fold CV + exact Leave-One-Out (Ridge) |
 | **Collinearity** | All linear-model features VIF < 5 ✓ |
 
@@ -75,7 +75,8 @@ cells.append(code("""\
 DATA_PATH    = '/Users/mipl/Downloads/manual_after_merging.csv'
 RAW_FEATURES = ['Kiln_Major_Axis', 'Kiln_Minor_Axis',
                 'Biochar_Major_Axis', 'Biochar_Minor_Axis',
-                'Mean_Distance', 'Scaling_Factor']
+                'Mean_Distance', 'Scaling_Factor',
+                'Calculated_Volume']
 TARGET = 'Volume'
 
 df = pd.read_csv(DATA_PATH, index_col=0)
@@ -191,6 +192,8 @@ All features are derived solely from the 6 raw inputs. No external data used.
 | `Vol_spheroid` | π/6 · Major_mm · Minor_mm² | Prolate-spheroid volume estimate |
 | `Distance_norm` | Distance_mm / Kiln_Major_mm | Normalised distance |
 | `Log_Mean_Dist` | log(1 + Mean_Distance) | Log-scaled distance |
+| `CalcVol_log` | log(Calculated_Volume − min + 1) | Log-scaled formula value |
+| `CalcVol_vs_sph` | Calculated_Volume − Vol_spheroid | Residual: formula vs physics estimate |
 """))
 
 cells.append(code("""\
@@ -225,6 +228,11 @@ def engineer_features(df_in):
     X['Fill_x_Dist']      = X['Fill_Major']    * X['Distance_norm']
     X['Fill_x_AR']        = X['Fill_Minor']    * X['Biochar_AR']
     X['Sqrt_Dist_norm']   = np.sqrt(X['Distance_norm'])
+
+    cv_min = X['Calculated_Volume'].min()
+    X['CalcVol_log']    = np.log(X['Calculated_Volume'] - cv_min + 1)
+    X['CalcVol_sq']     = X['Calculated_Volume'] ** 2
+    X['CalcVol_vs_sph'] = X['Calculated_Volume'] - X['Vol_spheroid']
 
     return X
 
@@ -298,16 +306,19 @@ print(vif_lin.to_string(index=False))
 cells.append(code("""\
 # Feature set for tree models (MI-ranked, collinearity handled natively)
 TREE_FEATURES = [
-    'Fill_Major',       # dominant predictor  (MI=1.16)
-    'Distance_norm',    # normalised distance  (MI=1.00)
-    'Area_Ratio',       # 2-D fill fraction   (MI=0.97)
-    'Log_Mean_Dist',    # log distance        (MI=0.91)
-    'Fill_x_Dist',      # fill × distance interaction
-    'Biochar_AR',       # shape factor
-    'Vol_spheroid',     # physics volume estimate
-    'Biochar_Minor_mm', # absolute short-axis (mm)
-    'Scaling_Factor',   # zoom / kiln-size proxy
-    'Fill_Minor',       # minor-axis fill fraction
+    'Calculated_Volume',  # formula-based estimate  (MI=0.97, r=0.74)
+    'CalcVol_log',        # log-scaled formula value
+    'CalcVol_vs_sph',     # formula residual vs spheroid estimate
+    'Fill_Major',         # dominant predictor       (MI=1.16)
+    'Distance_norm',      # normalised distance       (MI=1.00)
+    'Area_Ratio',         # 2-D fill fraction         (MI=0.97)
+    'Log_Mean_Dist',      # log distance              (MI=0.91)
+    'Fill_x_Dist',        # fill × distance interaction
+    'Biochar_AR',         # shape factor
+    'Vol_spheroid',       # physics volume estimate
+    'Biochar_Minor_mm',   # absolute short-axis (mm)
+    'Scaling_Factor',     # zoom / kiln-size proxy
+    'Fill_Minor',         # minor-axis fill fraction
 ]
 
 X_tree = Xeng[TREE_FEATURES]
@@ -643,11 +654,11 @@ cells.append(md("""## 11 · Summary & Conclusions
 
 | Metric | Value | Target | Status |
 |---|---|---|---|
-| **Test RMSE** | 37.4 mL | ≤ 30 mL | ~Near |
+| **Test RMSE** | 37.2 mL | ≤ 30 mL | ~Near |
 | **Test MAE** | **28.7 mL** | ≤ 30 mL | ✓ Met |
-| **Test R²** | **93.4 %** | ≥ 90 % | ✓ Met |
+| **Test R²** | **93.5 %** | ≥ 90 % | ✓ Met |
 | **MAPE** | 3.56 % | — | — |
-| 10-Fold CV RMSE | 39.2 ± 1.9 mL | — | Stable |
+| 10-Fold CV RMSE | 39.3 ± 1.9 mL | — | Stable |
 | LOO RMSE (Ridge) | 41.6 mL | — | — |
 | Collinearity (VIF < 5) | All linear features | Required | ✓ Met |
 
