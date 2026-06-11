@@ -249,12 +249,10 @@ def redact_by_labels(words):
 # Face detection (OpenCV YuNet).
 # ---------------------------------------------------------------------------
 
-def detect_faces(img_bgr, model_path):
-    if not os.path.exists(model_path):
-        return []
+def _detect_once(img_bgr, model_path, thr):
     h, w = img_bgr.shape[:2]
     det = cv2.FaceDetectorYN.create(model_path, "", (w, h),
-                                    score_threshold=0.6, nms_threshold=0.3)
+                                    score_threshold=thr, nms_threshold=0.3)
     det.setInputSize((w, h))
     _, faces = det.detect(img_bgr)
     out = []
@@ -263,6 +261,50 @@ def detect_faces(img_bgr, model_path):
             x, y, fw, fh = [int(v) for v in f[:4]]
             out.append((max(0, x), max(0, y), fw, fh))
     return out
+
+
+def detect_faces(img_bgr, model_path, thr=0.5):
+    """Multi-scale + rotation-tolerant face detection. Small, tilted portraits on
+    phone photos are easy to miss, so we retry upscaled and on +/-90 rotations."""
+    if not os.path.exists(model_path):
+        return []
+    H, W = img_bgr.shape[:2]
+    found = list(_detect_once(img_bgr, model_path, thr))
+
+    # retry upscaled (helps small faces), map boxes back
+    if max(H, W) < 2000:
+        s = 2000.0 / max(H, W)
+        big = cv2.resize(img_bgr, None, fx=s, fy=s, interpolation=cv2.INTER_CUBIC)
+        for (x, y, fw, fh) in _detect_once(big, model_path, thr):
+            found.append((int(x / s), int(y / s), int(fw / s), int(fh / s)))
+
+    # retry on rotations (cards are often held at an angle)
+    for k, rot in ((cv2.ROTATE_90_CLOCKWISE, 1), (cv2.ROTATE_90_COUNTERCLOCKWISE, 3)):
+        r = cv2.rotate(img_bgr, k)
+        rh, rw = r.shape[:2]
+        for (x, y, fw, fh) in _detect_once(r, model_path, thr):
+            if rot == 1:      # 90 CW: map back
+                found.append((y, rw - x - fw, fh, fw))
+            else:             # 90 CCW
+                found.append((rh - y - fh, x, fh, fw))
+
+    # de-duplicate overlapping boxes
+    dedup = []
+    for b in found:
+        if not any(_iou(b, d) > 0.3 for d in dedup):
+            dedup.append(b)
+    return dedup
+
+
+def _iou(a, b):
+    ax0, ay0, aw, ah = a; bx0, by0, bw, bh = b
+    ax1, ay1, bx1, by1 = ax0 + aw, ay0 + ah, bx0 + bw, by0 + bh
+    ix0, iy0 = max(ax0, bx0), max(ay0, by0)
+    ix1, iy1 = min(ax1, bx1), min(ay1, by1)
+    iw, ih = max(0, ix1 - ix0), max(0, iy1 - iy0)
+    inter = iw * ih
+    union = aw * ah + bw * bh - inter
+    return inter / union if union else 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -300,23 +342,35 @@ def union_box(boxes):
 # Pipeline.
 # ---------------------------------------------------------------------------
 
+def preprocess_for_ocr(img_bgr):
+    """Contrast-normalise and denoise to help OCR on noisy/low-contrast photos.
+    Returns a 3-channel image (so both OCR backends accept it)."""
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    gray = clahe.apply(gray)
+    gray = cv2.fastNlMeansDenoising(gray, h=7)
+    return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+
 def run(in_path, out_path, backend="tesseract", langs=None, mode="blackout",
         model_path="face_detection_yunet_2023mar.onnx", redact_faces=True,
-        min_score=0.55, use_labels=True, use_gliner=False):
+        min_score=0.55, use_labels=True, use_gliner=False, preprocess=False,
+        face_thr=0.5):
     img = cv2.imread(in_path)
     if img is None:
         raise SystemExit(f"Could not read image: {in_path}")
 
     langs = langs or _LANG_DEFAULTS.get(backend, "eng")
 
-    # 1+2. Upscale small images, then OCR.
+    # 1+2. Upscale small images (real ID photos are often low-res), optionally
+    #      contrast-normalise, then OCR.
     h, w = img.shape[:2]
     scale = 1.0
-    if max(h, w) < 1600:
-        scale = 1600.0 / max(h, w)
-        ocr_img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-    else:
-        ocr_img = img
+    base = img
+    if max(h, w) < 2000:
+        scale = 2000.0 / max(h, w)
+        base = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    ocr_img = preprocess_for_ocr(base) if preprocess else base
     words = OCR_BACKENDS[backend](ocr_img, langs)
     # rescale boxes back to original coords
     for wd in words:
@@ -366,7 +420,7 @@ def run(in_path, out_path, backend="tesseract", langs=None, mode="blackout",
     # 4. Faces. Expand the face box outward so the whole portrait (hair, ears,
     #    chin) is covered, not just the detected face rectangle.
     if redact_faces:
-        for fbox in detect_faces(img, model_path):
+        for fbox in detect_faces(img, model_path, thr=face_thr):
             fx, fy, fw, fh = fbox
             ex, ey = int(fw * 0.45), int(fh * 0.6)
             fbox = (max(0, fx - ex), max(0, fy - ey), fw + 2 * ex, fh + 2 * ey)
@@ -380,16 +434,32 @@ def run(in_path, out_path, backend="tesseract", langs=None, mode="blackout",
         redact_region(img, box, mode=mode)
     cv2.imwrite(out_path, img)
 
-    # 6. Audit log.
+    # 6. Fail-loud safety check: a redactor that silently misses PII is dangerous.
+    mean_conf = sum(wd["conf"] for wd in words) / len(words) if words else 0.0
+    has_id = any(a["type"] in ("AADHAAR", "PAN", "VID", "VOTER_ID") for a in audit)
+    has_face = any(a["type"] == "FACE" for a in audit)
+    warnings = []
+    if len(words) < 8 or mean_conf < 0.45:
+        warnings.append(f"LOW OCR YIELD ({len(words)} words, mean conf {mean_conf:.2f}) "
+                        "- the image may be too blurry/tilted to redact reliably. "
+                        "Try --preprocess and/or --backend easyocr.")
+    if not has_id:
+        warnings.append("NO STRUCTURED ID (Aadhaar/PAN/etc) was detected - if this is "
+                        "an ID card, the number was NOT read and is likely still visible.")
+    if redact_faces and not has_face:
+        warnings.append("NO FACE detected - any portrait is likely NOT redacted.")
+
+    # 7. Audit log.
     log_path = os.path.splitext(out_path)[0] + ".audit.json"
     with open(log_path, "w") as f:
         json.dump({
             "input": in_path, "output": out_path, "backend": backend,
-            "mode": mode, "words_ocr": len(words),
-            "redactions": len(redactions), "items": audit,
+            "mode": mode, "preprocess": preprocess, "words_ocr": len(words),
+            "mean_ocr_conf": round(mean_conf, 3), "redactions": len(redactions),
+            "warnings": warnings, "reliable": not warnings, "items": audit,
         }, f, indent=2)
 
-    return audit, log_path
+    return audit, log_path, warnings
 
 
 def main():
@@ -402,19 +472,30 @@ def main():
     ap.add_argument("--no-faces", action="store_true")
     ap.add_argument("--no-labels", action="store_true", help="disable label-anchored redaction")
     ap.add_argument("--gliner", action="store_true", help="enable GLiNER NER (needs `pip install gliner`)")
+    ap.add_argument("--preprocess", action="store_true", help="CLAHE + denoise before OCR (noisy photos)")
+    ap.add_argument("--face-thr", type=float, default=0.5, help="YuNet face score threshold (lower = more faces)")
     ap.add_argument("--model", default="face_detection_yunet_2023mar.onnx")
     args = ap.parse_args()
 
     out = args.out or (os.path.splitext(args.input)[0] + ".redacted.jpg")
-    audit, log_path = run(args.input, out, backend=args.backend, langs=args.langs,
-                          mode=args.mode, model_path=args.model,
-                          redact_faces=not args.no_faces,
-                          use_labels=not args.no_labels, use_gliner=args.gliner)
+    audit, log_path, warnings = run(
+        args.input, out, backend=args.backend, langs=args.langs,
+        mode=args.mode, model_path=args.model, redact_faces=not args.no_faces,
+        use_labels=not args.no_labels, use_gliner=args.gliner,
+        preprocess=args.preprocess, face_thr=args.face_thr)
     print(f"Redacted -> {out}")
     print(f"Audit    -> {log_path}")
     for a in audit:
         print(f"  [{a['type']:>16}] '{a['matched_text']}' score={a['score']} "
               f"checksum={a['checksum_valid']} box={a['box']}")
+    if warnings:
+        print("\n" + "!" * 60)
+        print("!!  REDACTION MAY BE INCOMPLETE - DO NOT TRUST BLINDLY  !!")
+        print("!" * 60)
+        for wn in warnings:
+            print(f"  - {wn}")
+    else:
+        print("\nOK: structured ID + face detected; no reliability warnings.")
 
 
 if __name__ == "__main__":

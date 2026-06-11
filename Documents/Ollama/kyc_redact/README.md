@@ -46,6 +46,31 @@ Outputs the redacted image + a `*.audit.json` log of every redaction
 Faces are detected with YuNet and the box is expanded to cover the whole portrait.
 PINCODE is detected but below the default threshold (tune `min_score`).
 
+## Real-world photos (laminated cards, glare, tilt) -- IMPORTANT
+
+The default Tesseract path is tuned for clean scans/renders. On a **phone photo of a
+laminated Aadhaar/PAN** (glare, angle, low res), Tesseract often fails to read the
+number -- and a number that isn't read is a number that isn't redacted. For real
+photos use:
+
+```bash
+python redact.py card.jpg --backend easyocr --langs en,hi --preprocess --gliner \
+    --mode blackout --face-thr 0.4
+```
+
+- `--backend easyocr`  far better OCR on real photos
+- `--preprocess`       CLAHE contrast + denoise before OCR
+- `--face-thr 0.4`     catch small/tilted portraits (detection also retries upscaled + rotated)
+
+The detector also runs a **loose OCR-fix pass** (e.g. `6Z5O 2SSO` -> `6250 2550`) so a
+garbled Aadhaar is still redacted.
+
+### Fail-loud safety
+The tool now **warns and marks the output unreliable** when it can't read the card
+(low OCR yield, no structured ID found, or no face found). A redactor that silently
+misses PII is worse than none -- always read the warnings and the `*.audit.json`
+(`"reliable": false`) before trusting the output. **Verify every redacted image by eye.**
+
 ## Notes / further upgrades
 - **Noisy phone photos** — switch `--backend easyocr` (or PaddleOCR) for higher OCR recall.
 - **Reversibility** — output is flattened raster; never ship a PDF with the original text layer intact.

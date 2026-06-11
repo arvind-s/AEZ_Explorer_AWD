@@ -82,6 +82,21 @@ def _digits(s: str) -> str:
     return re.sub(r"\D", "", s)
 
 
+# Length-preserving map of common OCR letter->digit confusions, so a misread
+# Aadhaar like "6Z5O 2SSO 71O5" can still be recovered. Length is preserved so
+# character offsets stay valid for box mapping.
+_OCR_DIGIT_FIX = str.maketrans({
+    "O": "0", "o": "0", "D": "0", "Q": "0",
+    "I": "1", "l": "1", "|": "1", "i": "1",
+    "Z": "2", "z": "2", "S": "5", "s": "5",
+    "B": "8", "G": "6", "T": "7",
+})
+
+
+def _normalize_digits(s: str) -> str:
+    return s.translate(_OCR_DIGIT_FIX)
+
+
 def find_entities(text: str):
     """Return a list of Match objects found in `text`."""
     out = []
@@ -127,5 +142,20 @@ def find_entities(text: str):
 
     for m in _PIN_RE.finditer(text):
         out.append(Match("PINCODE", m.group(1), m.start(1), m.end(1), 0.4, False))
+
+    # Loose recovery pass: re-scan with OCR letter->digit fixes so a garbled
+    # Aadhaar (e.g. "6Z5O 2SSO 71O5") is still redacted. Over-redaction here is
+    # the safe direction; we only emit if not already covered above.
+    covered = [(m.start, m.end) for m in out if m.label in ("AADHAAR", "VID")]
+    fixed = _normalize_digits(text)
+    for m in _AADHAAR_RE.finditer(fixed):
+        d = _digits(m.group(1))
+        if len(d) != 12 or d[0] in "01":
+            continue
+        if any(s <= m.start(1) and m.end(1) <= e for s, e in covered):
+            continue
+        valid = verhoeff_valid(d)
+        out.append(Match("AADHAAR", text[m.start(1):m.end(1)], m.start(1), m.end(1),
+                         0.85 if valid else 0.6, valid))
 
     return out
