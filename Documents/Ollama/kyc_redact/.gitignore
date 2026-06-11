@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+# downloadable artifact (see README curl command)
+face_detection_yunet_2023mar.onnx

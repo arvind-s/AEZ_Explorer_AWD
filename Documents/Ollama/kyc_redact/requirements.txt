@@ -1,0 +1,14 @@
+# Core (installed) -- lightweight, reliable on Python 3.13 / Apple Silicon
+opencv-contrib-python   # image IO, YuNet face detection, redaction drawing
+pytesseract             # (optional) wrapper; we call the tesseract binary directly
+pillow
+numpy
+# System dependency (Homebrew): tesseract + language packs
+#   brew install tesseract tesseract-lang
+# Face model (downloaded): face_detection_yunet_2023mar.onnx (opencv_zoo)
+
+# --- Accuracy upgrades (optional, heavier; torch-based) ---
+# easyocr               # better OCR on noisy phone photos; Indic scripts; box output
+# gliner                # zero-shot NER for free-form names / addresses
+# presidio-analyzer     # orchestration + anonymization operators
+# presidio-image-redactor

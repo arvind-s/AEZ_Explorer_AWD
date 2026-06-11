@@ -1,0 +1,101 @@
+{
+  "input": "sample_card.png",
+  "output": "sample_redacted.png",
+  "backend": "tesseract",
+  "mode": "blackout",
+  "words_ocr": 27,
+  "redactions": 7,
+  "items": [
+    {
+      "type": "PAN",
+      "matched_text": "ABCPK1234L",
+      "score": 0.97,
+      "checksum_valid": true,
+      "box": [
+        373,
+        505,
+        175,
+        20
+      ],
+      "source": "regex+checksum"
+    },
+    {
+      "type": "AADHAAR",
+      "matched_text": "2345 6789 0124",
+      "score": 0.95,
+      "checksum_valid": true,
+      "box": [
+        301,
+        440,
+        385,
+        39
+      ],
+      "source": "regex+checksum"
+    },
+    {
+      "type": "PHONE",
+      "matched_text": "9876543210",
+      "score": 0.8,
+      "checksum_valid": true,
+      "box": [
+        390,
+        265,
+        138,
+        19
+      ],
+      "source": "regex+checksum"
+    },
+    {
+      "type": "DOB",
+      "matched_text": "14/08/1990",
+      "score": 0.7,
+      "checksum_valid": false,
+      "box": [
+        386,
+        175,
+        122,
+        19
+      ],
+      "source": "regex+checksum"
+    },
+    {
+      "type": "NAME",
+      "matched_text": null,
+      "score": 0.75,
+      "checksum_valid": null,
+      "box": [
+        400,
+        125,
+        251,
+        20
+      ],
+      "source": "label-anchor"
+    },
+    {
+      "type": "ADDRESS",
+      "matched_text": null,
+      "score": 0.75,
+      "checksum_valid": null,
+      "box": [
+        393,
+        303,
+        307,
+        20
+      ],
+      "source": "label-anchor"
+    },
+    {
+      "type": "ADDRESS",
+      "matched_text": null,
+      "score": 0.75,
+      "checksum_valid": null,
+      "box": [
+        301,
+        440,
+        385,
+        39
+      ],
+      "source": "label-anchor"
+    }
+  ]
+}
