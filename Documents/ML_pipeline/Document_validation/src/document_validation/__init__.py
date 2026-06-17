@@ -19,6 +19,7 @@ from document_validation.ensemble import (
     recompute_page_from_votes,
     validate_document_file_ensemble,
 )
+from document_validation.vlm_detector import VlmDetector
 
 __all__ = [
     "BlurResult",
@@ -38,4 +39,5 @@ __all__ = [
     "validate_document_file",
     "validate_document_file_ensemble",
     "validate_document_image",
+    "VlmDetector",
 ]

@@ -366,6 +366,22 @@ def probe_available_detectors(
                 )
             continue
 
+        # VLM keys
+        from document_validation.vlm_detector import MODEL_REGISTRY as _VLM_REGISTRY
+        if name in _VLM_REGISTRY:
+            if name == "llava-phi3":
+                try:
+                    import requests as _req
+                    _req.get("http://localhost:11434", timeout=2)
+                    available.append(name)
+                except Exception:
+                    warnings.append(
+                        f"{name} skipped: Ollama not running at localhost:11434"
+                    )
+            else:
+                available.append(name)
+            continue
+
     if not available:
         available = ["opencv"]
     return list(dict.fromkeys(available)), warnings
