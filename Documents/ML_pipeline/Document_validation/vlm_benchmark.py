@@ -68,7 +68,12 @@ def run_model(model_key: str, eval_df: pd.DataFrame) -> list[dict]:
         try:
             page = load_first_page(row["file_path"])
             vote = detector.detect(page, row["file_path"], 1, CONFIG)
-            predicted = vote.label or "accepted"
+            if not vote.available:
+                predicted = "error"
+                if i == 0:
+                    print(f"\n  LOAD ERROR: {vote.error}")
+            else:
+                predicted = vote.label or "accepted"
         except Exception as exc:
             predicted = "error"
             print(f"  ERROR on {Path(row['file_path']).name}: {exc}")
@@ -94,9 +99,13 @@ def run_model(model_key: str, eval_df: pd.DataFrame) -> list[dict]:
         pass
 
     valid = [r for r in rows if r["predicted_label"] != "error"]
-    y_true = [r["expected_label"] for r in valid]
-    y_pred = [r["predicted_label"] for r in valid]
-    print(f"\n{classification_report(y_true, y_pred, labels=LABELS, zero_division=0)}")
+    n_errors = len(rows) - len(valid)
+    if n_errors:
+        print(f"\n  {n_errors}/{len(rows)} files errored — all marked as 'error', skipping metrics.")
+    if valid:
+        y_true = [r["expected_label"] for r in valid]
+        y_pred = [r["predicted_label"] for r in valid]
+        print(f"\n{classification_report(y_true, y_pred, labels=LABELS, zero_division=0)}")
     return rows
 
 

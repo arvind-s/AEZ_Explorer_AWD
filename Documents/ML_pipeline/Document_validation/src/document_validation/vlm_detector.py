@@ -89,7 +89,7 @@ def _load_qwen2_vl() -> Callable[[np.ndarray], str]:
 
     model_id = "Qwen/Qwen2-VL-2B-Instruct"
     model = Qwen2VLForConditionalGeneration.from_pretrained(
-        model_id, torch_dtype=torch.float16, device_map="mps"
+        model_id, dtype=torch.float16, device_map="mps"
     )
     processor = AutoProcessor.from_pretrained(model_id)
 
@@ -156,10 +156,12 @@ def _load_moondream2() -> Callable[[np.ndarray], str]:
 
     model_id = "vikhyatk/moondream2"
     revision = "2025-01-09"
-    tokenizer = AutoTokenizer.from_pretrained(model_id, revision=revision)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_id, revision=revision, trust_remote_code=True
+    )
     model = AutoModelForCausalLM.from_pretrained(
         model_id, revision=revision, trust_remote_code=True,
-        torch_dtype=torch.float16, device_map="mps",
+        dtype=torch.float16, device_map="mps",
     ).eval()
 
     def predict(page_bgr: np.ndarray) -> str:
@@ -178,11 +180,17 @@ MODEL_REGISTRY["moondream2"] = _load_moondream2
 def _load_smolvlm() -> Callable[[np.ndarray], str]:
     import torch
     from PIL import Image
-    from transformers import AutoProcessor, AutoModelForVision2Seq
+    from transformers import AutoProcessor
+
+    # transformers ≥5.0 renamed AutoModelForVision2Seq → AutoModelForImageTextToText
+    try:
+        from transformers import AutoModelForImageTextToText as _VisionModel
+    except ImportError:
+        from transformers import AutoModelForVision2Seq as _VisionModel  # type: ignore[assignment]
 
     model_id = "HuggingFaceTB/SmolVLM-Instruct"
     processor = AutoProcessor.from_pretrained(model_id)
-    model = AutoModelForVision2Seq.from_pretrained(
+    model = _VisionModel.from_pretrained(
         model_id, torch_dtype=torch.bfloat16, device_map="mps"
     ).eval()
 
