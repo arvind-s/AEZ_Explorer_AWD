@@ -14,10 +14,11 @@ class ValidationConfig:
 
     blur_laplacian_threshold: float = 900.0
     blur_tenengrad_threshold: float = 60.0
+    blur_patch_ratio: float = 0.30
     min_readability_contrast: float = 35.0
     max_low_readability_gray_std: float = 65.0
     min_document_confidence: float = 0.75
-    min_reject_confidence: float = 0.50
+    min_reject_confidence: float = 0.75
     min_cut_confidence: float = 0.85
     min_page_area_ratio: float = 0.25
     border_touch_ratio: float = 0.015
@@ -29,6 +30,7 @@ class ValidationConfig:
 @dataclass(frozen=True)
 class BlurResult:
     is_blurry: bool
+    watermark_blur: bool
     laplacian_variance: float
     tenengrad: float
     raw_laplacian_variance: float
@@ -251,6 +253,43 @@ def _resize_for_processing(bgr: np.ndarray, max_side: int) -> np.ndarray:
     )
 
 
+def _full_image_sharpness(gray: np.ndarray) -> tuple[float, float]:
+    lap = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    gx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+    gy = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+    return lap, float(np.mean(np.sqrt(gx * gx + gy * gy)))
+
+
+def _patch_sharpness_p25(
+    gray: np.ndarray, rows: int = 3, cols: int = 3
+) -> tuple[float, float]:
+    """
+    Laplacian variance and Tenengrad at the 25th-percentile across non-blank
+    patches.  A sharp watermark inflates full-image metrics but cannot rescue
+    the blurry content patches that drag down the percentile.
+    """
+    h, w = gray.shape
+    ph, pw = h // rows, w // cols
+    if ph < 40 or pw < 40:
+        return _full_image_sharpness(gray)
+
+    lap_vals, ten_vals = [], []
+    for r in range(rows):
+        for c in range(cols):
+            patch = gray[r * ph : (r + 1) * ph, c * pw : (c + 1) * pw]
+            if np.mean(patch > 220) > 0.80:  # skip mostly-blank/white patches
+                continue
+            lap_vals.append(float(cv2.Laplacian(patch, cv2.CV_64F).var()))
+            gx = cv2.Sobel(patch, cv2.CV_64F, 1, 0, ksize=3)
+            gy = cv2.Sobel(patch, cv2.CV_64F, 0, 1, ksize=3)
+            ten_vals.append(float(np.mean(np.sqrt(gx * gx + gy * gy))))
+
+    if len(lap_vals) < 3:
+        return _full_image_sharpness(gray)
+
+    return float(np.percentile(lap_vals, 25)), float(np.percentile(ten_vals, 25))
+
+
 def _detect_blur(bgr: np.ndarray, config: ValidationConfig) -> BlurResult:
     gray_raw = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     gray = cv2.equalizeHist(gray_raw)
@@ -258,31 +297,43 @@ def _detect_blur(bgr: np.ndarray, config: ValidationConfig) -> BlurResult:
     ink = _ink_mask(gray_raw, hsv[:, :, 2])
 
     raw_laplacian_variance = float(cv2.Laplacian(gray_raw, cv2.CV_64F).var())
-    laplacian_variance = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-    grad_x = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
-    grad_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
-    tenengrad = float(np.mean(np.sqrt(grad_x * grad_x + grad_y * grad_y)))
+    laplacian_variance, tenengrad = _full_image_sharpness(gray)
     readability_contrast = _readability_contrast(gray_raw, ink)
     grayscale_std = float(gray_raw.std())
 
-    lap_score = _below_threshold_score(
-        laplacian_variance,
-        config.blur_laplacian_threshold,
+    # Watermark-robust check: a clear watermark over blurry content inflates the
+    # full-image Laplacian but cannot lift the 25th-percentile patch score.
+    patch_lap_p25, _patch_ten_p25 = _patch_sharpness_p25(gray)
+    wm_threshold = config.blur_laplacian_threshold * config.blur_patch_ratio
+    watermark_masked_blur = (
+        laplacian_variance >= config.blur_laplacian_threshold
+        and patch_lap_p25 < wm_threshold
     )
-    ten_score = _below_threshold_score(tenengrad, config.blur_tenengrad_threshold)
-    optical_blur = (
+
+    # Require BOTH Laplacian AND Tenengrad to fail — avoids single-metric false positives
+    # and keeps rejection confidence high.
+    normal_blur = (
         laplacian_variance < config.blur_laplacian_threshold
-        or tenengrad < config.blur_tenengrad_threshold
+        and tenengrad < config.blur_tenengrad_threshold
     )
-    low_readability = (
-        readability_contrast < config.min_readability_contrast
-        and grayscale_std < config.max_low_readability_gray_std
-        and 0.01 <= float(np.mean(ink > 0)) <= 0.22
-    )
-    confidence = max(lap_score, ten_score)
+    optical_blur = normal_blur or watermark_masked_blur
+
+    lap_score = _below_threshold_score(laplacian_variance, config.blur_laplacian_threshold)
+    ten_score = _below_threshold_score(tenengrad, config.blur_tenengrad_threshold)
+    patch_score = _below_threshold_score(patch_lap_p25, wm_threshold)
+
+    if normal_blur:
+        # Both metrics agree — confidence is the weaker of the two
+        confidence = min(lap_score, ten_score)
+    elif watermark_masked_blur:
+        confidence = patch_score
+    else:
+        # Not blurry — report the strongest remaining blur signal (for ensemble use)
+        confidence = max(lap_score, ten_score)
 
     return BlurResult(
         is_blurry=optical_blur,
+        watermark_blur=watermark_masked_blur,
         laplacian_variance=round(laplacian_variance, 3),
         tenengrad=round(tenengrad, 3),
         raw_laplacian_variance=round(raw_laplacian_variance, 3),

@@ -273,7 +273,7 @@ def test_ensemble_rejects_not_clear_document_with_strict_config(tmp_path) -> Non
     image_path = tmp_path / "not_clear_document.png"
     cv2.imwrite(str(image_path), _low_contrast_camera_document())
 
-    strict_config = ValidationConfig(min_readability_contrast=65.0)
+    strict_config = ValidationConfig(min_readability_contrast=65.0, min_reject_confidence=0.50)
     result = validate_document_file_ensemble(image_path, config=strict_config, detectors=["opencv"])
     page = result.pages[0]
 
