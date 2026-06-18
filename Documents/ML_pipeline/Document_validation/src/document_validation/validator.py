@@ -12,12 +12,15 @@ import numpy as np
 class ValidationConfig:
     """Thresholds are intentionally visible so they can be tuned on real data."""
 
-    blur_laplacian_threshold: float = 900.0
     blur_tenengrad_threshold: float = 60.0
-    blur_patch_ratio: float = 0.30
+    blur_patch_ratio: float = 0.25
+    blur_patch_grid: int = 5
+    blur_patch_percentile: float = 10.0
     min_readability_contrast: float = 35.0
     max_low_readability_gray_std: float = 65.0
-    min_document_confidence: float = 0.75
+    min_document_confidence: float = 0.60
+    min_document_ink_ratio: float = 0.01
+    min_document_edge_density: float = 0.003
     min_reject_confidence: float = 0.75
     min_cut_confidence: float = 0.85
     min_page_area_ratio: float = 0.25
@@ -253,41 +256,60 @@ def _resize_for_processing(bgr: np.ndarray, max_side: int) -> np.ndarray:
     )
 
 
-def _full_image_sharpness(gray: np.ndarray) -> tuple[float, float]:
-    lap = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+def _image_tenengrad(gray: np.ndarray) -> float:
     gx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
     gy = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
-    return lap, float(np.mean(np.sqrt(gx * gx + gy * gy)))
+    return float(np.mean(np.sqrt(gx * gx + gy * gy)))
 
 
-def _patch_sharpness_p25(
-    gray: np.ndarray, rows: int = 3, cols: int = 3
-) -> tuple[float, float]:
+def _patch_tenengrad(
+    gray: np.ndarray,
+    rows: int = 5,
+    cols: int = 5,
+    percentile: float = 10.0,
+) -> float:
     """
-    Laplacian variance and Tenengrad at the 25th-percentile across non-blank
-    patches.  A sharp watermark inflates full-image metrics but cannot rescue
-    the blurry content patches that drag down the percentile.
+    Tenengrad at `percentile` across non-blank, non-uniform patches.
+    A 5×5 grid with the 10th-percentile means a watermark can dominate at most
+    2-3 patches without rescuing the score — blurry content patches will drag it down.
     """
     h, w = gray.shape
     ph, pw = h // rows, w // cols
-    if ph < 40 or pw < 40:
-        return _full_image_sharpness(gray)
+    if ph < 30 or pw < 30:
+        return _image_tenengrad(gray)
 
-    lap_vals, ten_vals = [], []
+    ten_vals: list[float] = []
     for r in range(rows):
         for c in range(cols):
             patch = gray[r * ph : (r + 1) * ph, c * pw : (c + 1) * pw]
-            if np.mean(patch > 220) > 0.80:  # skip mostly-blank/white patches
+            # Skip blank (bright) or uniform background patches.
+            # var<700 covers gray/white background in PDF renders (var=274-586)
+            # while preserving content patches (var≥3880) and blurry content.
+            if np.mean(patch > 220) > 0.80 or float(np.var(patch)) < 700.0:
                 continue
-            lap_vals.append(float(cv2.Laplacian(patch, cv2.CV_64F).var()))
             gx = cv2.Sobel(patch, cv2.CV_64F, 1, 0, ksize=3)
             gy = cv2.Sobel(patch, cv2.CV_64F, 0, 1, ksize=3)
             ten_vals.append(float(np.mean(np.sqrt(gx * gx + gy * gy))))
 
-    if len(lap_vals) < 3:
-        return _full_image_sharpness(gray)
+    if len(ten_vals) < 3:
+        return _image_tenengrad(gray)
 
-    return float(np.percentile(lap_vals, 25)), float(np.percentile(ten_vals, 25))
+    return float(np.percentile(ten_vals, percentile))
+
+
+def _ink_tenengrad(gray: np.ndarray, ink: np.ndarray) -> float:
+    """
+    Mean Tenengrad over dilated ink (text) regions.
+    A watermark has sharp ink; blurry content has soft ink. Averaging over ALL
+    ink regions prevents a watermark alone from inflating the score past threshold.
+    Returns 0.0 if the ink mask is empty.
+    """
+    region = cv2.dilate(ink, cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))) > 0
+    if not np.any(region):
+        return 0.0
+    gx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+    gy = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+    return float(np.sqrt(gx * gx + gy * gy)[region].mean())
 
 
 def _detect_blur(bgr: np.ndarray, config: ValidationConfig) -> BlurResult:
@@ -296,40 +318,49 @@ def _detect_blur(bgr: np.ndarray, config: ValidationConfig) -> BlurResult:
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
     ink = _ink_mask(gray_raw, hsv[:, :, 2])
 
+    # Diagnostic fields — kept for visibility but not used in blur decisions.
     raw_laplacian_variance = float(cv2.Laplacian(gray_raw, cv2.CV_64F).var())
-    laplacian_variance, tenengrad = _full_image_sharpness(gray)
+    laplacian_variance = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+    tenengrad = _image_tenengrad(gray)
     readability_contrast = _readability_contrast(gray_raw, ink)
     grayscale_std = float(gray_raw.std())
 
-    # Watermark-robust check: a clear watermark over blurry content inflates the
-    # full-image Laplacian but cannot lift the 25th-percentile patch score.
-    patch_lap_p25, _patch_ten_p25 = _patch_sharpness_p25(gray)
-    wm_threshold = config.blur_laplacian_threshold * config.blur_patch_ratio
+    # Patch Tenengrad: 5×5 grid, 10th-percentile of content patches.
+    # A watermark covers at most 2-3 of 25 patches; blurry content patches drag the score.
+    patch_ten = _patch_tenengrad(
+        gray, rows=config.blur_patch_grid, cols=config.blur_patch_grid,
+        percentile=config.blur_patch_percentile,
+    )
+    wm_ten_threshold = config.blur_tenengrad_threshold * config.blur_patch_ratio
+
+    # Ink-region Tenengrad: averages sharp watermark ink with blurry content ink.
+    # The watermark alone cannot keep the mean above threshold if content is blurry.
+    ink_ten = _ink_tenengrad(gray, ink)
+    ink_ten_threshold = config.blur_tenengrad_threshold * 2.0
+
+    normal_blur = tenengrad < config.blur_tenengrad_threshold
+
+    # Watermark-masked blur: full image Tenengrad is high (watermark), but patches
+    # and ink regions reveal the underlying content is blurry.
     watermark_masked_blur = (
-        laplacian_variance >= config.blur_laplacian_threshold
-        and patch_lap_p25 < wm_threshold
+        tenengrad >= config.blur_tenengrad_threshold
+        and patch_ten < wm_ten_threshold
+        and ink_ten < ink_ten_threshold
     )
 
-    # Require BOTH Laplacian AND Tenengrad to fail — avoids single-metric false positives
-    # and keeps rejection confidence high.
-    normal_blur = (
-        laplacian_variance < config.blur_laplacian_threshold
-        and tenengrad < config.blur_tenengrad_threshold
-    )
     optical_blur = normal_blur or watermark_masked_blur
 
-    lap_score = _below_threshold_score(laplacian_variance, config.blur_laplacian_threshold)
     ten_score = _below_threshold_score(tenengrad, config.blur_tenengrad_threshold)
-    patch_score = _below_threshold_score(patch_lap_p25, wm_threshold)
+    patch_score = _below_threshold_score(patch_ten, wm_ten_threshold)
+    ink_score = _below_threshold_score(ink_ten, ink_ten_threshold)
 
     if normal_blur:
-        # Both metrics agree — confidence is the weaker of the two
-        confidence = min(lap_score, ten_score)
+        confidence = ten_score
     elif watermark_masked_blur:
-        confidence = patch_score
+        confidence = max(patch_score, ink_score)
     else:
-        # Not blurry — report the strongest remaining blur signal (for ensemble use)
-        confidence = max(lap_score, ten_score)
+        confidence = ten_score
 
     return BlurResult(
         is_blurry=optical_blur,
@@ -456,8 +487,18 @@ def _detect_document(bgr: np.ndarray, config: ValidationConfig) -> DocumentResul
     if edge_density < 0.004:
         reasons.append("too few edges for a readable document")
 
+    # Fallback: blurry or cut docs lose edges/ink but are still documents.
+    # If ink and edges are present at minimum levels, trust the content over the score.
+    content_present = (
+        ink_ratio >= config.min_document_ink_ratio
+        and edge_density >= config.min_document_edge_density
+    )
+    is_document = confidence >= config.min_document_confidence or (
+        content_present and confidence >= config.min_document_confidence * 0.75
+    )
+
     return DocumentResult(
-        is_document=confidence >= config.min_document_confidence,
+        is_document=is_document,
         confidence=round(float(confidence), 3),
         page_area_ratio=round(page_area_ratio, 3),
         bright_low_saturation_ratio=round(bright_low_saturation_ratio, 3),
