@@ -4,7 +4,10 @@
 **Status:** Approved, building
 **References:**
 - EO4AWD (Space Climate Observatory): S1 C-band + ALOS-2/PALSAR-2 L-band + optical → ML classification of paddy irrigation regime → inundation-status map, methane map, MRV dashboard.
-- MDPI *Remote Sensing* 18(13):2190 (L-band paddy water-status cluster; PDF behind a 403 at build time — thresholds to be folded in when available).
+- **MDPI 2190** — Hoang-Phi, Lam-Dao, Dang-Pham-Bao, Le-Toan, Truong-Nhat-Kieu &
+  Sobue (2026), *"Inundation Monitoring in Rice Fields Using ALOS-2 PALSAR-2: A
+  Case Study of An Giang, the Mekong Delta in Vietnam"*, *Remote Sensing*
+  18(13):2190, DOI 10.3390/rs18132190. See "Alignment with MDPI 2190" below.
 - Existing repo scripts `05_gee_palsar2_awd.js`, `06_gee_awd_full_pixel_model.js`, `utils.py`.
 
 ## Goal
@@ -104,7 +107,34 @@ Runs without live GEE (sandbox has no EE auth/network):
 EE functions (`build_awd_image`, `compute_stats`, `download_geotiff`) require live
 EE and are validated against `06`'s logic; run on a small AOI first.
 
+## Alignment with MDPI 2190
+
+The 2190 paper is the closest published benchmark to this pipeline, but its
+method is **not a threshold swap** for the current WI model — folding it in
+literally is a v2 modelling change. What the abstract establishes (the numeric
+per-stage dB thresholds are in the paywalled methods section, not incorporated
+here — no invented values):
+
+- **Reported accuracy: 81% overall, Kappa 0.77** for inundated-vs-non-inundated
+  classification. Use this as the **validation target** once we have labels.
+- **L-band VV** penetrates dense canopy best. Our pipeline uses **HH** — the
+  free GEE `JAXA/ALOS/PALSAR-2/Level2_2/ScanSAR` collection is HH/HV, with no VV,
+  so matching 2190's polarization needs a different PALSAR-2 product.
+- **Phenology-conditioned**: inundation is discriminated **per rice growth
+  stage**, with **Sentinel-1 time series estimating rice age**. Our model applies
+  one fixed threshold pair across the whole season.
+- **Absolute backscatter (dB)** thresholds, vs our **relative** min-max Wetness
+  Index. The paper's dB numbers therefore cannot be dropped into `--wet/--dry`;
+  a dB path would be a separate classifier.
+
+**Three divergences to close for a 2190-aligned v2:** absolute-dB classification;
+Sentinel-1 rice-age/phenology conditioning with per-stage thresholds; VV
+polarization (needs a VV-capable PALSAR-2 product). Each needs the paper's
+numeric threshold table (paywalled) to calibrate.
+
 ## Out of scope (v2)
 
 S1+PALSAR-2 fusion; per-feature stats; real rice-crop mask (WorldCereal/GloRice);
 Refined Lee filter parity; ascending+descending fusion; soil/AEZ covariates.
+**MDPI-2190-aligned modelling** (absolute-dB, phenology-conditioned, VV) — see
+"Alignment with MDPI 2190" above; blocked on the paper's numeric thresholds.

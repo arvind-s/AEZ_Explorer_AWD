@@ -194,8 +194,27 @@ Outputs in `--out/`:
 
 All model thresholds are CLI flags defaulting to `06`'s values
 (`--wet 0.3 --dry -0.1 --ref-cycles 5 --awd-thresh 0.4 --scale 25`) — override
-them to match a calibrated reference (e.g. the MDPI 18(13):2190 numbers) without
-touching code.
+them to match a calibrated reference without touching code.
+
+### Relationship to MDPI 2190 (Hoang-Phi et al. 2026)
+
+The closest published benchmark is [*Inundation Monitoring in Rice Fields Using
+ALOS-2 PALSAR-2: A Case Study of An Giang, the Mekong Delta in
+Vietnam*](https://doi.org/10.3390/rs18132190) (*Remote Sensing* 18(13):2190).
+Its method is **not a threshold swap** for this pipeline — it diverges in three
+ways, so aligning to it is a v2 modelling change, not a `--wet/--dry` edit:
+
+- **Absolute backscatter (dB)** thresholds vs. our **relative** min-max Wetness
+  Index — the paper's dB numbers don't map onto `--wet/--dry`.
+- **Phenology-conditioned**: it uses Sentinel-1 to estimate rice age and applies
+  **per-growth-stage** thresholds; we apply one fixed pair all season.
+- **L-band VV** (best canopy penetration) vs. our **HH** — the free GEE
+  `.../PALSAR-2/.../ScanSAR` collection has no VV.
+
+Its reported **81% accuracy / Kappa 0.77** is a useful validation target once
+labels exist. The paper's numeric per-stage thresholds are in its paywalled
+methods section (not reproduced here — no values were invented). See the design
+doc's "Alignment with MDPI 2190" for the v2 roadmap.
 
 **Tested vs. not:** the pure-Python units (`load_aoi`, `write_stats`,
 `parse_args`, the download-guardrail) have unit tests — run `pytest
