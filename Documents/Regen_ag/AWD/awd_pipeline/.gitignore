@@ -1,0 +1,12 @@
+# OS / editor cruft
+.DS_Store
+.ipynb_checkpoints/
+
+# Python
+__pycache__/
+*.pyc
+
+# Large regenerable satellite rasters (downloaded scenes, exports)
+raw_scenes_*/*.tif
+outputs/
+*.tif
