@@ -263,7 +263,7 @@ def _detect_once(img_bgr, model_path, thr):
     return out
 
 
-def detect_faces(img_bgr, model_path, thr=0.5):
+def detect_faces(img_bgr, model_path, thr=0.40):
     """Multi-scale + rotation-tolerant face detection. Small, tilted portraits on
     phone photos are easy to miss, so we retry upscaled and on +/-90 rotations."""
     if not os.path.exists(model_path):
@@ -355,7 +355,7 @@ def preprocess_for_ocr(img_bgr):
 def run(in_path, out_path, backend="tesseract", langs=None, mode="blackout",
         model_path="face_detection_yunet_2023mar.onnx", redact_faces=True,
         min_score=0.55, use_labels=True, use_gliner=False, preprocess=False,
-        face_thr=0.5):
+        face_thr=0.40):
     img = cv2.imread(in_path)
     if img is None:
         raise SystemExit(f"Could not read image: {in_path}")
@@ -473,7 +473,7 @@ def main():
     ap.add_argument("--no-labels", action="store_true", help="disable label-anchored redaction")
     ap.add_argument("--gliner", action="store_true", help="enable GLiNER NER (needs `pip install gliner`)")
     ap.add_argument("--preprocess", action="store_true", help="CLAHE + denoise before OCR (noisy photos)")
-    ap.add_argument("--face-thr", type=float, default=0.5, help="YuNet face score threshold (lower = more faces)")
+    ap.add_argument("--face-thr", type=float, default=0.40, help="YuNet face score threshold (lower = more faces)")
     ap.add_argument("--model", default="face_detection_yunet_2023mar.onnx")
     args = ap.parse_args()
 

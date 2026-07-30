@@ -12,13 +12,14 @@ import numpy as np
 class ValidationConfig:
     """Thresholds are intentionally visible so they can be tuned on real data."""
 
-    blur_tenengrad_threshold: float = 60.0
+    blur_tenengrad_threshold: float = 70.0
     blur_patch_ratio: float = 0.25
     blur_patch_grid: int = 5
     blur_patch_percentile: float = 10.0
     min_readability_contrast: float = 35.0
     max_low_readability_gray_std: float = 65.0
     min_document_confidence: float = 0.60
+    max_document_saturation_p90: float = 999.0
     min_document_ink_ratio: float = 0.01
     min_document_edge_density: float = 0.003
     min_reject_confidence: float = 0.75
@@ -480,7 +481,7 @@ def _detect_document(bgr: np.ndarray, config: ValidationConfig) -> DocumentResul
         and structured_document_score < 0.68
     ):
         reasons.append("no large white or low-saturation page region found")
-    if saturation_p90 > 130:
+    if saturation_p90 > config.max_document_saturation_p90:
         reasons.append("image has high color saturation for a document")
     if ink_ratio < 0.003:
         reasons.append("too little text or dark document content found")
@@ -493,8 +494,11 @@ def _detect_document(bgr: np.ndarray, config: ValidationConfig) -> DocumentResul
         ink_ratio >= config.min_document_ink_ratio
         and edge_density >= config.min_document_edge_density
     )
-    is_document = confidence >= config.min_document_confidence or (
-        content_present and confidence >= config.min_document_confidence * 0.75
+    high_saturation = saturation_p90 > config.max_document_saturation_p90
+    is_document = not high_saturation and (
+        confidence >= config.min_document_confidence or (
+            content_present and confidence >= config.min_document_confidence * 0.75
+        )
     )
 
     return DocumentResult(
