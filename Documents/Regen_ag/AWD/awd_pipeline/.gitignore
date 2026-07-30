@@ -5,6 +5,7 @@
 # Python
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # Large regenerable satellite rasters (downloaded scenes, exports)
 raw_scenes_*/*.tif

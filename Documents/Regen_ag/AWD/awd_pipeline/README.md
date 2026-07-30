@@ -157,6 +157,56 @@ and start with a small AOI (a single village/block) before scaling to a
 whole district, since per-pixel array operations are much more
 computationally expensive than the AOI-averaged version.
 
+## Automated pipeline: shapefile → stats + GeoTIFF (`awd_pipeline.py`)
+
+`06_gee_awd_full_pixel_model.js` is the same methodology but has to be pasted
+into the Code Editor by hand, with a hardcoded rectangle AOI and Drive exports.
+`awd_pipeline.py` turns it into a repeatable command: **shapefile in → AWD stats
++ GeoTIFF out**, run from your terminal against Earth Engine's Python API, with
+the outputs downloaded straight into a local folder. Design doc:
+`docs/superpowers/specs/2026-07-30-awd-shapefile-pipeline-design.md`.
+
+```bash
+pip install -r requirements.txt
+earthengine authenticate          # one time; opens a browser
+python awd_pipeline.py \
+    --shapefile my_fields.shp \
+    --start 2020-06-01 --end 2020-11-30 \
+    --out outputs/ \
+    --project <your-ee-cloud-project>   # if your EE account requires one
+```
+
+What it does (all model logic is a faithful port of `06`):
+1. `load_aoi` — reads the shapefile, reprojects to WGS84, **dissolves all
+   polygons into one AOI** (whole-shapefile aggregate).
+2. `build_awd_image` — PALSAR-2 ScanSAR HH → calibrate → despeckle → per-pixel
+   Wetness Index → shifted-array drying-cycle count → AWD classification.
+3. `compute_stats` — `reduceRegion` sum of per-class pixel area over the AOI.
+4. `download_geotiff` — pulls the classification raster locally via
+   `getDownloadURL`.
+
+Outputs in `--out/`:
+- `awd_classification.tif` — 4 bands: `awd_likelihood`, `is_awd`,
+  `is_continuous_flood`, `n_cycles` (25 m, clipped to the shapefile).
+- `awd_stats.json` + `awd_stats.csv` — one aggregate row: `awd_area_ha`,
+  `continuous_flood_area_ha`, `paddy_area_ha`, `pct_awd`, `n_images`, plus the
+  season and every threshold used (provenance).
+
+All model thresholds are CLI flags defaulting to `06`'s values
+(`--wet 0.3 --dry -0.1 --ref-cycles 5 --awd-thresh 0.4 --scale 25`) — override
+them to match a calibrated reference (e.g. the MDPI 18(13):2190 numbers) without
+touching code.
+
+**Tested vs. not:** the pure-Python units (`load_aoi`, `write_stats`,
+`parse_args`, the download-guardrail) have unit tests — run `pytest
+test_awd_pipeline.py`. The Earth Engine functions call live GEE and are **not
+executed in CI**; they mirror `06`'s already-reasoned logic. **Run on a SMALL
+AOI first** (a single village/block): per-pixel array ops are expensive and
+large AOIs hit GEE's ~50 MB direct-download ceiling — the script catches that
+and prints a tiling/`--scale` hint rather than a stack trace, but it's still a
+real limit. The same caveats as `06` apply (HH-only, no rice mask, simplified
+despeckle + cycle-count, thresholds not yet ground-truth-calibrated).
+
 ## Known gaps / what this is *not* yet
 
 - Not yet using ascending+descending orbit fusion (roadmap item, addresses

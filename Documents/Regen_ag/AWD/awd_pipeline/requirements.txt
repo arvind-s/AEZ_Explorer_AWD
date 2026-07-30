@@ -1,0 +1,10 @@
+# AWD pipeline (awd_pipeline.py) — shapefile -> stats + GeoTIFF via Earth Engine.
+# The 01-04 Sentinel-1 Python path additionally needs the packages listed in
+# README.md (pystac-client, planetary-computer, rasterio, scikit-image, scipy).
+earthengine-api>=0.1.400
+geopandas>=0.13
+shapely>=2.0
+pyproj>=3.4
+
+# Dev/test only:
+pytest>=7.0
