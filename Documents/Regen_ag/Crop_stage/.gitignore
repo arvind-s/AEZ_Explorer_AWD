@@ -1,0 +1,9 @@
+.venv/
+.cache/
+phenology_output/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Notebook checkpoints
+.ipynb_checkpoints/

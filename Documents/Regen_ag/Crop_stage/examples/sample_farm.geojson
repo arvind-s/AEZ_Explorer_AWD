@@ -1,0 +1,24 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "farm_id": "demo_farm_001",
+        "name": "Sample paddy field"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [84.10, 18.80],
+            [84.11, 18.80],
+            [84.11, 18.81],
+            [84.10, 18.81],
+            [84.10, 18.80]
+          ]
+        ]
+      }
+    }
+  ]
+}
