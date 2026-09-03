@@ -4,7 +4,7 @@ Farm-level crop phenology using:
 
 1. **STAC S1/S2 download** — Agroforestry `STAC_s1_s2` `pipeline_runner` (Sentinel-1 RTC VH + Sentinel-2 L2A NDVI)
 2. **farm_heterogeneity signal logic** — green-up, peak search, curve cleaning
-3. **ERA5-Land GDD** — daily min/max temperature via Copernicus CDS
+3. **ERA5-Land GDD** — daily min/max temperature (Open-Meteo by default; optional CDS)
 4. **D-6072 GDD stage thresholds** — scaled for ~120-day variety
 
 ## Kharif calendar
@@ -17,17 +17,17 @@ Farm-level crop phenology using:
 
 ## Quick start
 
-### 1. CDS API (ERA5-Land)
+### 1. Weather for GDD (ERA5-Land)
 
-Register at [Copernicus CDS](https://cds.climate.copernicus.eu/) and accept the ERA5-Land datasets. Then either:
+**Default: Open-Meteo** — fast, no API key, ERA5-Land daily min/max. One HTTP request per farm location per season.
+
+**Optional: Copernicus CDS** — slow (queued jobs). Set `era5_source="cds"` or `--era5-source cds`. Requires `~/.cdsapirc`:
 
 ```bash
 # ~/.cdsapirc
 url: https://cds.climate.copernicus.eu/api/v2
 key: <UID>:<API_KEY>
 ```
-
-Or set `CDS_API_URL` and `CDS_API_KEY` in the environment.
 
 ### 2. Planetary Computer (STAC)
 
@@ -71,6 +71,21 @@ python examples/run_phenology.py \
   --date-confidence uncertain \
   --output-dir phenology_output
 ```
+
+### 5. Streamlit (multi-farm shapefile)
+
+Upload a shapefile (zip) or GeoJSON with **one row per farm**. Pick the ID column and an optional sowing-date column; missing sowing dates are estimated from NDVI/VH.
+
+```bash
+cd Crop_stage
+streamlit run streamlit_app/app.py
+```
+
+**Tabs:**
+- **Individual farm** — dropdown, NDVI / VH / GDD curves, stage metrics
+- **All farms** — summary table, combined S2 NDVI + S1 VH plots, cumulative GDD by farm
+
+**Note:** First STAC download for many farms can take a long time. Use **Use cached STAC only** after a successful run.
 
 ## Outputs
 

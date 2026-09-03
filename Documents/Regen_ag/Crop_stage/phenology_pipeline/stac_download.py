@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import importlib
+import signal
 import sys
+import threading
 from pathlib import Path
 
 import geopandas as gpd
@@ -17,6 +20,35 @@ def _ensure_stac_on_path(stac_root: Path) -> Path:
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
     return root
+
+
+def _load_pipeline_runner():
+    """
+    Import pipeline_runner safely from Streamlit worker threads.
+
+    pipeline_runner registers SIGINT at import time; Python only allows that on
+    the main thread, so we skip registration when imported elsewhere.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        original_signal = signal.signal
+
+        def _safe_signal(signalnum, handler):
+            try:
+                return original_signal(signalnum, handler)
+            except ValueError:
+                return None
+
+        signal.signal = _safe_signal
+
+    mod = importlib.import_module("pipeline_runner")
+    return (
+        mod.OutputConfig,
+        mod.PipelineConfig,
+        mod.S1Config,
+        mod.S2CloudConfig,
+        mod.S2Config,
+        mod.run_pipeline,
+    )
 
 
 def _resolve_farm_row(
@@ -107,14 +139,14 @@ def download_timeseries(config: PhenologyConfig, force: bool = False) -> dict:
             }
 
     stac_root = _ensure_stac_on_path(config.stac_root)
-    from pipeline_runner import (
+    (
         OutputConfig,
         PipelineConfig,
         S1Config,
         S2CloudConfig,
         S2Config,
         run_pipeline,
-    )
+    ) = _load_pipeline_runner()
 
     aoi_path = out_base / f"aoi_{uid}.geojson"
     farm_gdf.to_file(aoi_path, driver="GeoJSON")
@@ -153,6 +185,88 @@ def download_timeseries(config: PhenologyConfig, force: bool = False) -> dict:
     return {
         "run_dir": run_dir,
         "uid": uid,
+        "aoi_path": aoi_path,
+        "from_cache": False,
+        **artifacts,
+    }
+
+
+def download_timeseries_multi(config: PhenologyConfig, force: bool = False) -> dict:
+    """
+    Run STAC pipeline_runner for every polygon in polygon_path (one shared download).
+
+    Returns dict with paths: run_dir, s1_nc, s2_nc, s1_csv, s2_csv, farm_ids
+    """
+    out_base = Path(config.output_dir)
+    out_base.mkdir(parents=True, exist_ok=True)
+
+    gdf = gpd.read_file(config.polygon_path)
+    if config.farm_id_col not in gdf.columns:
+        raise ValueError(f"Column '{config.farm_id_col}' not in polygon file")
+    farm_ids = [str(v) for v in gdf[config.farm_id_col].astype(str)]
+
+    cache_root = Path(config.timeseries_cache_dir or (out_base / "stac_download"))
+    if not force:
+        cached = find_cached_timeseries(cache_root, config.download_start, config.download_end)
+        if cached is not None:
+            print(f"Using cached STAC output: {cached['run_dir']}")
+            return {
+                "run_dir": cached["run_dir"],
+                "farm_ids": farm_ids,
+                "s1_nc": cached.get("s1_nc"),
+                "s2_nc": cached.get("s2_nc"),
+                "s1_csv": cached.get("s1_csv"),
+                "s2_csv": cached.get("s2_csv"),
+                "from_cache": True,
+            }
+
+    stac_root = _ensure_stac_on_path(config.stac_root)
+    (
+        OutputConfig,
+        PipelineConfig,
+        S1Config,
+        S2CloudConfig,
+        S2Config,
+        run_pipeline,
+    ) = _load_pipeline_runner()
+
+    aoi_path = out_base / "aoi_all.geojson"
+    gdf.to_file(aoi_path, driver="GeoJSON")
+
+    pc = PipelineConfig(
+        input_path=str(aoi_path),
+        uid_col=config.farm_id_col,
+        start_date=config.download_start,
+        end_date=config.download_end,
+        interval=config.stac_interval,
+        resolution=config.stac_resolution_m,
+        max_workers=config.stac_max_workers,
+        s1=S1Config(enabled=True, bands=["vh"]),
+        s2=S2Config(
+            enabled=True,
+            indices=["NDVI"],
+            bands=[],
+            cloud=S2CloudConfig(use_scl=True, max_scene_cloud=90),
+        ),
+        output=OutputConfig(
+            directory=str(cache_root),
+            formats=["netcdf", "csv"],
+            nan_fill=-9999.0,
+            netcdf_agg="mean",
+        ),
+    )
+
+    result = run_pipeline(pc)
+    if not result.success:
+        raise RuntimeError(f"STAC download failed: {result.errors}")
+
+    run_dir = result.output_dir
+    tag = f"{config.download_start}_{config.download_end}"
+    artifacts = _artifact_paths(run_dir, tag)
+
+    return {
+        "run_dir": run_dir,
+        "farm_ids": farm_ids,
         "aoi_path": aoi_path,
         "from_cache": False,
         **artifacts,

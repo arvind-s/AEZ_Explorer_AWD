@@ -82,23 +82,34 @@ def curve_stage_hint(
     vh_clean: np.ndarray,
     obs_dates: pd.DatetimeIndex,
     transplant_date: pd.Timestamp,
+    assessment_date: pd.Timestamp | None = None,
 ) -> str:
     """Rough satellite-only stage hint for validation."""
     if pd.isna(transplant_date):
         return "unknown"
 
     dates = pd.DatetimeIndex(obs_dates)
-    dat = (dates - transplant_date).days
-    today_idx = int(np.nanargmax(dat))
-    d = dat[today_idx]
+    if assessment_date is not None:
+        assessment_date = pd.Timestamp(assessment_date)
+        if assessment_date < transplant_date:
+            return "pre_transplant"
+        eligible = dates <= assessment_date
+        if not eligible.any():
+            return "unknown"
+        ref_idx = int(np.where(eligible)[0][-1])
+        dat = int((dates[ref_idx] - transplant_date).days)
+    else:
+        dat = (dates - transplant_date).days
+        ref_idx = int(np.nanargmax(dat))
+        dat = int(dat[ref_idx])
 
-    ndvi = ndvi_clean[today_idx] if np.isfinite(ndvi_clean[today_idx]) else np.nanmean(ndvi_clean)
-    if d < 15:
+    ndvi = ndvi_clean[ref_idx] if np.isfinite(ndvi_clean[ref_idx]) else np.nanmean(ndvi_clean)
+    if dat < 15:
         return "establishment"
-    if d < 55 and (np.isnan(ndvi) or ndvi < 0.55):
+    if dat < 55 and (np.isnan(ndvi) or ndvi < 0.55):
         return "vegetative"
-    if d < 85 and np.isfinite(ndvi) and ndvi >= 0.55:
+    if dat < 85 and np.isfinite(ndvi) and ndvi >= 0.55:
         return "reproductive"
-    if d < 120:
+    if dat < 120:
         return "ripening"
     return "maturity"

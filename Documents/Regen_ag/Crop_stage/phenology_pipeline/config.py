@@ -11,6 +11,8 @@ DEFAULT_STAC_ROOT = Path(
 )
 
 DateConfidence = Literal["trusted", "uncertain"]
+Era5Source = Literal["openmeteo", "cds"]
+Era5SpatialMode = Literal["aoi", "per_farm"]
 
 
 @dataclass
@@ -67,9 +69,12 @@ class PhenologyConfig:
     stac_max_workers: int = 2
     timeseries_cache_dir: str | None = None
 
-    # ERA5-Land (CDS API — set CDS_API_URL / CDS_API_KEY in env or ~/.cdsapirc)
+    # ERA5-Land weather for GDD
     era5_cache_dir: str = ".cache/phenology/era5"
     era5_time_zone: str = "utc+05:30"
+    era5_source: Era5Source = "openmeteo"  # openmeteo: seconds; cds: queued CDS jobs
+    era5_spatial_mode: Era5SpatialMode = "aoi"  # aoi: one fetch for whole shapefile
+    compute_gdd: bool = False  # optional ERA5 weather + GDD staging (slow if CDS)
 
     # GDD stage thresholds
     gdd_stages: tuple[GDDStageThreshold, ...] = field(default_factory=lambda: DEFAULT_GDD_STAGES)
@@ -85,8 +90,14 @@ class PhenologyConfig:
             raise ValueError(f"polygon_path not found: {p}")
         if self.date_confidence not in ("trusted", "uncertain"):
             raise ValueError("date_confidence must be 'trusted' or 'uncertain'")
-        if self.date_confidence == "trusted" and not self.transplant_date:
-            raise ValueError("transplant_date is required when date_confidence='trusted'")
+        if self.date_confidence == "trusted" and not self.transplant_date and not self.sowing_date:
+            raise ValueError(
+                "transplant_date or sowing_date is required when date_confidence='trusted'"
+            )
         if not self.download_data and not self.timeseries_cache_dir:
             # allow default stac_download under output_dir
             pass
+        if self.era5_source not in ("openmeteo", "cds"):
+            raise ValueError("era5_source must be 'openmeteo' or 'cds'")
+        if self.era5_spatial_mode not in ("aoi", "per_farm"):
+            raise ValueError("era5_spatial_mode must be 'aoi' or 'per_farm'")

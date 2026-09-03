@@ -40,7 +40,18 @@ def main() -> None:
     p.add_argument("--no-download", action="store_true", help="Use cached STAC only")
     p.add_argument("--force-download", action="store_true", help="Ignore STAC cache")
 
+    p.add_argument(
+        "--compute-gdd",
+        action="store_true",
+        help="Fetch ERA5 weather and compute GDD-based staging (slower)",
+    )
     p.add_argument("--era5-cache", default=".cache/phenology/era5")
+    p.add_argument(
+        "--era5-source",
+        choices=["openmeteo", "cds"],
+        default="openmeteo",
+        help="Weather source for GDD (openmeteo=fast, cds=slow CDS queue)",
+    )
     p.add_argument("--variety-days", type=int, default=120)
 
     args = p.parse_args()
@@ -62,13 +73,15 @@ def main() -> None:
         download_data=not args.no_download,
         timeseries_cache_dir=args.stac_cache_dir,
         era5_cache_dir=args.era5_cache,
+        era5_source=args.era5_source,
+        compute_gdd=args.compute_gdd,
         variety_duration_days=args.variety_days,
     )
     if args.stac_root:
         cfg.stac_root = Path(args.stac_root)
 
-    if args.date_confidence == "trusted" and not args.transplant_date:
-        p.error("--transplant-date is required when --date-confidence=trusted")
+    if args.date_confidence == "trusted" and not args.transplant_date and not args.sowing_date:
+        p.error("--transplant-date or --sowing-date required when --date-confidence=trusted")
 
     result = run_phenology(
         cfg,
